@@ -36,8 +36,167 @@ async function run() {
     await client.connect();
     const database = client.db("shacroy");
     const homeCollection = database.collection("home"); // Hero slider images collection
+    const customerCollection = database.collection("customers"); // Customer collection
 
     console.log("Successfully connected to MongoDB!");
+
+    // Customer Registration Route
+    app.post("/api/auth/register", async (req, res) => {
+      try {
+        const customerData = req.body;
+
+        // Check if user already exists
+        const existingUser = await customerCollection.findOne({
+          email: customerData.email,
+        });
+        if (existingUser) {
+          return res
+            .status(400)
+            .send({ message: "এই ইমেল দিয়ে ইতিমধ্যে অ্যাকাউন্ট খোলা হয়েছে।" });
+        }
+
+        customerData.createdAt = new Date();
+        const result = await customerCollection.insertOne(customerData);
+        res.status(201).send({ message: "Registration successful", result });
+      } catch (error) {
+        console.error("Register error:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Customer Login Route (Basic mock check)
+    app.post("/api/auth/login", async (req, res) => {
+      try {
+        const { email, password } = req.body;
+        const user = await customerCollection.findOne({ email });
+
+        if (!user || user.password !== password) {
+          return res.status(401).send({ message: "ভুল ইমেল অথবা পাসওয়ার্ড!" });
+        }
+
+        res.status(200).send({
+          message: "Login successful",
+          token: "mock-jwt-token-shacroy",
+          user: { name: user.name, email: user.email },
+        });
+      } catch (error) {
+        console.error("Login error:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Customer Extra Info Save Route
+    app.post("/api/customer/save-extra-info", async (req, res) => {
+      try {
+        const { email, phone, addresses, diffReceiverName, diffReceiverPhone } =
+          req.body;
+
+        // customerCollection-এ ইউজারের ইমেল দিয়ে খুঁেজ বাকি ইনফো আপডেট করা
+        const result = await customerCollection.updateOne(
+          { email: email },
+          {
+            $set: {
+              phone,
+              addresses,
+              diffReceiverName,
+              diffReceiverPhone,
+              updatedAt: new Date(),
+            },
+          },
+          { upsert: true },
+        );
+
+        res
+          .status(200)
+          .send({ message: "Extra info saved successfully", result });
+      } catch (error) {
+        console.error("Save extra info error:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Get Customer Profile & Extra Info Route
+    app.get("/api/customer/profile", async (req, res) => {
+      try {
+        const { email } = req.query;
+        const customer = await customerCollection.findOne({ email });
+        if (!customer) {
+          return res
+            .status(404)
+            .send({ message: "Customer profile not found" });
+        }
+        res.status(200).send(customer);
+      } catch (error) {
+        console.error("Get profile error:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // Customer Profile & Avatar Update Route
+    app.post(
+      "/api/customer/update-profile",
+      upload.single("profileImage"),
+      async (req, res) => {
+        try {
+          const {
+            email,
+            name,
+            phone,
+            addresses,
+            diffReceiverName,
+            diffReceiverPhone,
+            isDiffReceiver,
+          } = req.body;
+
+          let imageUrl = req.body.profileImage;
+
+          // Jodi new image file upload hoy, tahole Cloudinary-te upload hobe
+          if (req.file) {
+            const uploadResult = await new Promise((resolve, reject) => {
+              const stream = cloudinary.uploader.upload_stream(
+                { folder: "shacroy/profiles" },
+                (error, result) => {
+                  if (error) reject(error);
+                  else resolve(result);
+                },
+              );
+              stream.end(req.file.buffer);
+            });
+            imageUrl = uploadResult.secure_url;
+          }
+
+          // MongoDB customerCollection update kora
+          const result = await customerCollection.updateOne(
+            { email: email },
+            {
+              $set: {
+                name,
+                phone,
+                profileImage: imageUrl,
+                addresses: addresses ? JSON.parse(addresses) : undefined,
+                diffReceiverName,
+                diffReceiverPhone,
+                isDiffReceiver:
+                  isDiffReceiver === "true" || isDiffReceiver === true,
+                updatedAt: new Date(),
+              },
+            },
+            { upsert: true },
+          );
+
+          res
+            .status(200)
+            .send({
+              message: "Profile updated successfully",
+              imageUrl,
+              result,
+            });
+        } catch (error) {
+          console.error("Update profile error:", error);
+          res.status(500).send({ message: "Internal server error" });
+        }
+      },
+    );
 
     // 1. Get all Hero Banner / Slider images
     app.get("/api/home-sliders", async (req, res) => {
@@ -64,7 +223,7 @@ async function run() {
             (error, result) => {
               if (error) reject(error);
               else resolve(result);
-            }
+            },
           );
           stream.end(req.file.buffer);
         });
@@ -77,7 +236,9 @@ async function run() {
         };
 
         const result = await homeCollection.insertOne(newSlider);
-        res.status(201).send({ message: "Slider added successfully", result, newSlider });
+        res
+          .status(201)
+          .send({ message: "Slider added successfully", result, newSlider });
       } catch (error) {
         console.error("Upload error:", error);
         res.status(500).send({ message: "Internal server error", error });
@@ -101,13 +262,14 @@ async function run() {
         }
 
         const result = await homeCollection.deleteOne(query);
-        res.status(200).send({ message: "Slider deleted successfully", result });
+        res
+          .status(200)
+          .send({ message: "Slider deleted successfully", result });
       } catch (error) {
         console.error("Delete error:", error);
         res.status(500).send({ message: "Failed to delete slider", error });
       }
     });
-
   } catch (error) {
     console.error("Database connection error:", error);
   }
